@@ -7,8 +7,8 @@
 #include <DHT.h>
 
 // Reemplace con sus credenciales de red
-const char* ssid = "ocorp";
-const char* password = "koh2020.";
+const char* ssid = "nombre_de_red_WiFi";
+const char* password = "contraseña_wifi";
 
 #define DHTPIN 2     // Pin digital conectado al sensor DHT
 
