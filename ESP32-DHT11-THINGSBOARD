@@ -2,65 +2,88 @@
 #include <WiFi.h>           // libreria WiFi para ESP32
 #include <ThingsBoard.h>    // ThingsBoard SDK
 
+// Macro auxiliar para calcular el tamaño de la matriz
 #define COUNT_OF(x) ((sizeof(x)/sizeof(0[x])) / ((size_t)(!(sizeof(x) % sizeof(0[x])))))
 
 #define WIFI_AP_NAME        "nombre de la wifi donde se conectara el dispositivo."
 #define WIFI_PASSWORD       "contraseña de la wifi donde se conectara el dispositivo"
 
-
+// token de acceso 
 #define TOKEN               "poner el token de tu dispositivo creado en el servidor"
+// Instancia del servidor ThingsBoard.
 #define THINGSBOARD_SERVER  "direccion de tu servidor"
 
+// Tasa de baud para debug serial
 #define SERIAL_DEBUG_BAUD    115200
 
+// Inicializar el cliente ThingsBoard
 WiFiClient espClient;
+// Inicializar la instancia de ThingsBoard
 ThingsBoard tb(espClient);
+// el estado de la Wifi
 int status = WL_IDLE_STATUS;
 
+// Matriz con LEDs que deben encenderse uno por uno
 uint8_t leds_cycling[] = { 25, 26, 32 };
+// Matriz con LEDs que deben controlarse desde ThingsBoard, uno por uno
 uint8_t leds_control[] = { 19, 22, 21 };
 
+// Objeto DHT
 DHTesp dht;
+// Pin ESP32 utilizado para consultar DHT11
 #define DHT_PIN 2
 
+// Retardo del bucle de la aplicación principal
 int quant = 20;
 
+// Periodo inicial de ciclo de LED.
 int led_delay = 1000;
+// Periodo de envío de datos de temperatura / humedad.
 int send_delay = 2000;
 
+// Tiempo transcurrido desde que se encendió el LED, milisegundos.
 int led_passed = 0;
+// Tiempo transcurrido desde que se enviaron los datos de temperatura / humedad, milisegundos.   
 int send_passed = 0;
 
+// Establecer en verdadero si la aplicación está suscrita a los mensajes RPC.
 bool subscribed = false;
+// Número de LED que está encendido actualmente.
 int current_led = 0;
 
-
+// Procesa la función para la llamada RPC "setValue"
+// RPC_Data es una variante JSON, que se puede consultar con el operador []
+// Consulte https://arduinojson.org/v5/api/jsonvariant/subscript/ para obtener más detalles
 RPC_Response processDelayChange(const RPC_Data &data)
 {
-  Serial.println("Received the set delay RPC method");
+  Serial.println("Recibió el método RPC de retardo establecido");
 
-
+  // Process data
 
   led_delay = data;
 
-  Serial.print("Set new delay: ");
+  Serial.print("Establecer nueva demora: ");
   Serial.println(led_delay);
 
   return RPC_Response(NULL, led_delay);
 }
 
-
+// Procesa la función para la llamada RPC "getValue"
+// RPC_Data es una variante JSON, que se puede consultar con el operador []
+// Consulte https://arduinojson.org/v5/api/jsonvariant/subscript/ para obtener más detalles
 RPC_Response processGetDelay(const RPC_Data &data)
 {
-  Serial.println("Received the get value method");
+  Serial.println("Recibió el método de obtener valor");
 
   return RPC_Response(NULL, led_delay);
 }
 
-
+// Procesa la función para la llamada RPC "setGpioStatus"
+// RPC_Data es una variante JSON, que se puede consultar con el operador []
+// Consulte https://arduinojson.org/v5/api/jsonvariant/subscript/ para obtener más detalles
 RPC_Response processSetGpioState(const RPC_Data &data)
 {
-  Serial.println("Received the set GPIO RPC method");
+  Serial.println("Recibió el método GPIO RPC establecido");
 
   int pin = data["pin"];
   bool enabled = data["enabled"];
@@ -77,23 +100,27 @@ RPC_Response processSetGpioState(const RPC_Data &data)
   return RPC_Response(data["pin"], (bool)data["enabled"]);
 }
 
+// Controladores RPC
 RPC_Callback callbacks[] = {
   { "setValue",         processDelayChange },
   { "getValue",         processGetDelay },
   { "setGpioStatus",    processSetGpioState },
 };
 
+// Configurar una aplicación
 void setup() {
+  // Inicializar serial para depurar
   Serial.begin(SERIAL_DEBUG_BAUD);
   WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
-  Serial.println("Connecting to AP ...");
+  Serial.println("Conectado a AP ...");
+  // intentar conectarse a la red WiFi
 
   WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println("Connected to AP");
+  Serial.println("Conectado a AP");
 
   // Pinconfig
 
@@ -105,22 +132,28 @@ void setup() {
     pinMode(leds_control[i], OUTPUT);
   }
 
+// Inicializar sensor de temperatura
   dht.setup(DHT_PIN, DHTesp::DHT11);
 }
 
+// Bucle de aplicación principal
 void loop() {
   delay(quant);
 
   led_passed += quant;
   send_passed += quant;
 
+// Compruebe si el próximo LED debe estar encendido
   if (led_passed > led_delay) {
+// Apagar el LED actual
     digitalWrite(leds_cycling[current_led], LOW);
     led_passed = 0;
     current_led = current_led >= 2 ? 0 : (current_led + 1);
+    // Enciende el siguiente LED en una fila
     digitalWrite(leds_cycling[current_led], HIGH);
   }
 
+  // Vuelva a conectarse a WiFi, si es necesario
   if (WiFi.status() != WL_CONNECTED) {
     status = WiFi.status();
   if ( status != WL_CONNECTED) {
@@ -129,45 +162,52 @@ void loop() {
       delay(500);
       Serial.print(".");
     }
-    Serial.println("Connected to AP");
+    Serial.println("Conectado a AP");
   }
     return;
   }
 
+  // Vuelva a conectarse a ThingsBoard, si es necesario
   if (!tb.connected()) {
     subscribed = false;
 
-    Serial.print("Connecting to: ");
+    // Conectarse a ThingsBoard
+    Serial.print("Conectado a: ");
     Serial.print(THINGSBOARD_SERVER);
-    Serial.print(" with token ");
+    Serial.print(" con token ");
     Serial.println(TOKEN);
     if (!tb.connect(THINGSBOARD_SERVER, TOKEN)) {
-      Serial.println("Failed to connect");
+      Serial.println("No se pudo conectar");
       return;
     }
   }
 
+  // Suscríbete para RPC, si es necesario
   if (!subscribed) {
-    Serial.println("Subscribing for RPC...");
+    Serial.println("Suscripción a RPC...");
 
-    
+   // Realice una suscripción. Todo el procesamiento de datos consecuente ocurrirá en
+   // devoluciones de llamada indicadas por la matriz callbacks [].
     if (!tb.RPC_Subscribe(callbacks, COUNT_OF(callbacks))) {
-      Serial.println("Failed to subscribe for RPC");
+      Serial.println("No se pudo suscribir a RPC");
       return;
     }
 
-    Serial.println("Subscribe done");
+    Serial.println("Suscríbete hecho");
     subscribed = true;
   }
 
+  // Compruebe si es el momento de enviar de DHT11 temperatura y humedad
   if (send_passed > send_delay) {
-    Serial.println("Sending data...");
+    Serial.println("Enviando datos...");
 
-   
+    // Carga nueva telemetría en ThingsBoard usando MQTT.
+    // Ver https://thingsboard.io/docs/reference/mqtt-api/#telemetry-upload-api
+    // para más detalles
 
     TempAndHumidity lastValues = dht.getTempAndHumidity();    
     if (isnan(lastValues.humidity) || isnan(lastValues.temperature)) {
-      Serial.println("Failed to read from DHT sensor!");
+      Serial.println("¡No se pudo leer el sensor DHT!");
     } else {
       tb.sendTelemetryFloat("temperature", lastValues.temperature);
       tb.sendTelemetryFloat("humidity", lastValues.humidity);
@@ -176,6 +216,33 @@ void loop() {
     send_passed = 0;
   }
 
+  // Procesar mensajes
   tb.loop();
+}
+
+void InitWiFi()
+{
+  Serial.println("Conectando a AP ...");
+  // intentar conectarse a la red WiFi
+
+  WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("Conectado a AP");
+}
+
+void reconnect() {
+// Bucle hasta que nos volvamos a conectar
+  status = WiFi.status();
+  if ( status != WL_CONNECTED) {
+    WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("Conectado a AP");
+  }
 }
 
