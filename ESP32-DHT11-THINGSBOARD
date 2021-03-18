@@ -1,0 +1,181 @@
+#include <DHTesp.h>         // libreria de DHT para ESP32 
+#include <WiFi.h>           // libreria WiFi para ESP32
+#include <ThingsBoard.h>    // ThingsBoard SDK
+
+#define COUNT_OF(x) ((sizeof(x)/sizeof(0[x])) / ((size_t)(!(sizeof(x) % sizeof(0[x])))))
+
+#define WIFI_AP_NAME        "nombre de la wifi donde se conectara el dispositivo."
+#define WIFI_PASSWORD       "contraseña de la wifi donde se conectara el dispositivo"
+
+
+#define TOKEN               "poner el token de tu dispositivo creado en el servidor"
+#define THINGSBOARD_SERVER  "direccion de tu servidor"
+
+#define SERIAL_DEBUG_BAUD    115200
+
+WiFiClient espClient;
+ThingsBoard tb(espClient);
+int status = WL_IDLE_STATUS;
+
+uint8_t leds_cycling[] = { 25, 26, 32 };
+uint8_t leds_control[] = { 19, 22, 21 };
+
+DHTesp dht;
+#define DHT_PIN 2
+
+int quant = 20;
+
+int led_delay = 1000;
+int send_delay = 2000;
+
+int led_passed = 0;
+int send_passed = 0;
+
+bool subscribed = false;
+int current_led = 0;
+
+
+RPC_Response processDelayChange(const RPC_Data &data)
+{
+  Serial.println("Received the set delay RPC method");
+
+
+
+  led_delay = data;
+
+  Serial.print("Set new delay: ");
+  Serial.println(led_delay);
+
+  return RPC_Response(NULL, led_delay);
+}
+
+
+RPC_Response processGetDelay(const RPC_Data &data)
+{
+  Serial.println("Received the get value method");
+
+  return RPC_Response(NULL, led_delay);
+}
+
+
+RPC_Response processSetGpioState(const RPC_Data &data)
+{
+  Serial.println("Received the set GPIO RPC method");
+
+  int pin = data["pin"];
+  bool enabled = data["enabled"];
+
+  if (pin < COUNT_OF(leds_control)) {
+    Serial.print("Setting LED ");
+    Serial.print(pin);
+    Serial.print(" to state ");
+    Serial.println(enabled);
+
+    digitalWrite(leds_control[pin], enabled);
+  }
+
+  return RPC_Response(data["pin"], (bool)data["enabled"]);
+}
+
+RPC_Callback callbacks[] = {
+  { "setValue",         processDelayChange },
+  { "getValue",         processGetDelay },
+  { "setGpioStatus",    processSetGpioState },
+};
+
+void setup() {
+  Serial.begin(SERIAL_DEBUG_BAUD);
+  WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
+  Serial.println("Connecting to AP ...");
+
+  WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("Connected to AP");
+
+  // Pinconfig
+
+  for (size_t i = 0; i < COUNT_OF(leds_cycling); ++i) {
+    pinMode(leds_cycling[i], OUTPUT);
+  }
+
+  for (size_t i = 0; i < COUNT_OF(leds_control); ++i) {
+    pinMode(leds_control[i], OUTPUT);
+  }
+
+  dht.setup(DHT_PIN, DHTesp::DHT11);
+}
+
+void loop() {
+  delay(quant);
+
+  led_passed += quant;
+  send_passed += quant;
+
+  if (led_passed > led_delay) {
+    digitalWrite(leds_cycling[current_led], LOW);
+    led_passed = 0;
+    current_led = current_led >= 2 ? 0 : (current_led + 1);
+    digitalWrite(leds_cycling[current_led], HIGH);
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    status = WiFi.status();
+  if ( status != WL_CONNECTED) {
+    WiFi.begin(WIFI_AP_NAME, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("Connected to AP");
+  }
+    return;
+  }
+
+  if (!tb.connected()) {
+    subscribed = false;
+
+    Serial.print("Connecting to: ");
+    Serial.print(THINGSBOARD_SERVER);
+    Serial.print(" with token ");
+    Serial.println(TOKEN);
+    if (!tb.connect(THINGSBOARD_SERVER, TOKEN)) {
+      Serial.println("Failed to connect");
+      return;
+    }
+  }
+
+  if (!subscribed) {
+    Serial.println("Subscribing for RPC...");
+
+    
+    if (!tb.RPC_Subscribe(callbacks, COUNT_OF(callbacks))) {
+      Serial.println("Failed to subscribe for RPC");
+      return;
+    }
+
+    Serial.println("Subscribe done");
+    subscribed = true;
+  }
+
+  if (send_passed > send_delay) {
+    Serial.println("Sending data...");
+
+   
+
+    TempAndHumidity lastValues = dht.getTempAndHumidity();    
+    if (isnan(lastValues.humidity) || isnan(lastValues.temperature)) {
+      Serial.println("Failed to read from DHT sensor!");
+    } else {
+      tb.sendTelemetryFloat("temperature", lastValues.temperature);
+      tb.sendTelemetryFloat("humidity", lastValues.humidity);
+    }
+
+    send_passed = 0;
+  }
+
+  tb.loop();
+}
+
